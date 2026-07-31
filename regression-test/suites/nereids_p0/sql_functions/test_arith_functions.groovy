@@ -28,6 +28,64 @@ suite("test_arith_functions") {
         sql 'select int_divide(1, 1), bitand(1, 1), bitor(2, 2), bitxor(3.0, 2.0), bitnot(3.0)'
         result([[1, 1, 2, 1L, -4L]])
     }
+
+    sql "DROP TABLE IF EXISTS test_int_divide_overflow"
+    sql """
+        CREATE TABLE test_int_divide_overflow (
+            id INT,
+            dividend BIGINT,
+            divisor BIGINT,
+            int_dividend INT
+        )
+        DUPLICATE KEY(id)
+        DISTRIBUTED BY HASH(id) BUCKETS 1
+        PROPERTIES ("replication_num" = "1")
+    """
+    sql """
+        INSERT INTO test_int_divide_overflow VALUES
+            (1, CAST('-9223372036854775808' AS BIGINT), -1, -2147483648),
+            (2, 1, -1, 1),
+            (3, CAST('-9223372036854775808' AS BIGINT), 1, -2147483648)
+    """
+
+    // constant/constant
+    test {
+        sql """
+            SELECT int_divide(CAST('-9223372036854775808' AS BIGINT), CAST(-1 AS BIGINT)),
+                   int_divide(CAST(-2147483648 AS INT), CAST(-1 AS BIGINT))
+        """
+        result([[null, 2147483648L]])
+    }
+
+    // vector/constant
+    test {
+        sql """
+            SELECT id, int_divide(dividend, CAST(-1 AS BIGINT))
+            FROM test_int_divide_overflow WHERE id <= 2 ORDER BY id
+        """
+        result([[1, null], [2, -1L]])
+    }
+
+    // constant/vector
+    test {
+        sql """
+            SELECT id, int_divide(CAST('-9223372036854775808' AS BIGINT), divisor)
+            FROM test_int_divide_overflow WHERE id IN (1, 3) ORDER BY id
+        """
+        result([[1, null], [3, -9223372036854775808L]])
+    }
+
+    // vector/vector
+    test {
+        sql "SELECT id, int_divide(dividend, divisor) FROM test_int_divide_overflow ORDER BY id"
+        result([[1, null], [2, -1L], [3, -9223372036854775808L]])
+    }
+    test {
+        sql "SELECT id, int_divide(int_dividend, divisor) FROM test_int_divide_overflow ORDER BY id"
+        result([[1, 2147483648L], [2, -1L], [3, -2147483648L]])
+    }
+    sql "DROP TABLE test_int_divide_overflow"
+
     test {
         sql 'select add(k1, k2) + subtract(k2, k3) + multiply(k3, k4), cast(divide(k4, k3) + mod(k4, k3) as bigint) from test order by k1 limit 1'
         result([[11022916880, 11902L]])

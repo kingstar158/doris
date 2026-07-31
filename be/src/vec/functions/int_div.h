@@ -21,6 +21,7 @@
 #pragma once
 
 #include <libdivide.h>
+#include <limits>
 #include <string.h>
 
 #include "vec/columns/column_vector.h"
@@ -34,6 +35,16 @@ struct DivideIntegralImpl {
     using ResultType = typename NumberTraits::ResultOfIntegerDivision<A, B>::Type;
     using Traits = NumberTraits::BinaryOperatorTraits<A, B>;
 
+    template <typename Result>
+    static inline bool is_division_overflow(A a, B b) {
+        if constexpr (std::is_integral_v<Result> && std::is_signed_v<Result> &&
+                      std::is_integral_v<A> && std::is_integral_v<B>) {
+            return Result(a) == std::numeric_limits<Result>::min() && Result(b) == -1;
+        } else {
+            return false;
+        }
+    }
+
     template <typename Result = ResultType>
     static void apply(const typename Traits::ArrayA& a, B b,
                       typename ColumnVector<Result>::Container& c,
@@ -42,6 +53,15 @@ struct DivideIntegralImpl {
         UInt8 is_null = b == 0;
         memset(null_map.data(), is_null, size);
 
+        if constexpr (std::is_integral_v<Result> && std::is_signed_v<Result> &&
+                      std::is_integral_v<A> && std::is_integral_v<B>) {
+            if (Result(b) == -1) {
+                for (size_t i = 0; i < size; i++) {
+                    c[i] = apply<Result>(a[i], b, null_map[i]);
+                }
+                return;
+            }
+        }
         if (!is_null) {
             if constexpr (!std::is_floating_point_v<A> && !std::is_same_v<A, Int128> &&
                           !std::is_same_v<A, Int8> && !std::is_same_v<A, UInt8>) {
@@ -59,8 +79,11 @@ struct DivideIntegralImpl {
 
     template <typename Result = ResultType>
     static inline Result apply(A a, B b, UInt8& is_null) {
-        is_null = b == 0;
-        return Result(a / (b + is_null));
+        is_null = b == 0 || is_division_overflow<Result>(a, b);
+        if (is_null) {
+            return Result {};
+        }
+        return Result(a / b);
     }
 };
 
